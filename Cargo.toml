@@ -1,0 +1,11 @@
+[package]
+name = "gravity"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+macroquad = "0.4"
+
+# Keep `cargo run` smooth: optimise dependencies (macroquad) even in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
