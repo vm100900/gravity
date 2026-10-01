@@ -13,31 +13,57 @@ fn draw_arrow(center: Vec2, dir: Dir, size: f32, color: Color) {
     draw_triangle(p(-0.45, 0.05), p(0.45, 0.05), p(0.0, 0.55), color);
 }
 
-/// Every font size text is drawn at. All of their glyphs are rasterised up
-/// front: if macroquad's glyph atlas has to grow mid-game it recreates its
-/// texture, which can leave text rendering as solid black boxes.
-const FONT_SIZES: [u16; 16] = [16, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 56, 60, 64, 80, 110];
+// ---------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------
 
-pub(crate) fn warm_font_cache() {
-    let font = get_default_font();
-    let chars: Vec<char> = (32u8..127).map(char::from).collect();
-    for size in FONT_SIZES {
-        font.populate_font_cache(&chars, size);
-    }
+/// Every font size text is drawn at. Their glyphs are rasterised up front so the atlas doesn't
+/// have to grow mid-game.
+const FONT_SIZES: [u16; 16] = [16, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 56, 60, 64, 80, 110];
+/// From this size up, text is headings and numbers, so only these characters are pre-rasterised.
+const BIG_TEXT: u16 = 56;
+const BIG_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -:._!?+";
+
+thread_local! {
+    /// Patrick Hand by Patrick Wagesreiter, SIL Open Font License 1.1 (assets/OFL.txt).
+    static FONT: Font = load_ttf_font_from_bytes(include_bytes!("../assets/PatrickHand-Regular.ttf"))
+        .expect("the bundled font loads");
 }
 
-/// Snap to the nearest pre-cached size so no new glyphs are ever needed.
+fn with_font<R>(f: impl FnOnce(&Font) -> R) -> R {
+    FONT.with(f)
+}
+
+pub(crate) fn warm_font_cache() {
+    // macroquad looks glyphs up at the size scaled for the screen's pixel density.
+    let dpi = screen_dpi_scale();
+    let all: Vec<char> = (32u8..127).map(char::from).collect();
+    let big: Vec<char> = BIG_CHARS.chars().collect();
+    with_font(|font| {
+        for size in FONT_SIZES {
+            let chars = if size >= BIG_TEXT { &big } else { &all };
+            font.populate_font_cache(chars, (size as f32 * dpi).ceil() as u16);
+        }
+    });
+}
+
+/// Snap to the nearest pre-cached size so no new glyphs are needed.
 fn font_size(size: f32) -> u16 {
     *FONT_SIZES.iter().min_by_key(|s| (**s as i32 - size.round() as i32).abs()).unwrap()
 }
 
+fn measure(text: &str, size: f32) -> TextDimensions {
+    with_font(|font| measure_text(text, Some(font), font_size(size), 1.0))
+}
+
 fn draw_label(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text(text, x, y, font_size(size) as f32, color);
+    with_font(|font| {
+        draw_text_ex(text, x, y, TextParams { font: Some(font), font_size: font_size(size), color, ..Default::default() });
+    });
 }
 
 fn text_centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    let dims = measure_text(text, None, font_size(size), 1.0);
-    draw_label(text, x - dims.width / 2.0, y, size, color);
+    draw_label(text, x - measure(text, size).width / 2.0, y, size, color);
 }
 
 impl Game {
@@ -327,7 +353,7 @@ impl Game {
 
         // Distance, and the world's seed code (the box widens for long codes).
         let world_line = format!("world {}  deaths {}", self.world.code, self.deaths);
-        let box_w = (measure_text(&world_line, None, font_size(16.0), 1.0).width + 20.0).max(222.0);
+        let box_w = (measure(&world_line, 16.0).width + 20.0).max(222.0);
         let x = sw - box_w - 8.0;
         draw_rectangle(x, 8.0, box_w, 80.0, Color::new(0.0, 0.0, 0.0, 0.45));
         draw_label(&format!("{:.0} m", self.distance()), x + 10.0, 38.0, 36.0, WHITE);
@@ -389,7 +415,7 @@ impl Game {
         let afk_in = AFK_TIME - self.idle;
         let w = screen_width();
         let afk_banner = |text: &str, color: Color| {
-            let dims = measure_text(text, None, font_size(28.0), 1.0);
+            let dims = measure(text, 28.0);
             draw_rectangle(w / 2.0 - dims.width / 2.0 - 16.0, 110.0, dims.width + 32.0, 42.0, Color::new(0.1, 0.0, 0.15, 0.75));
             text_centered(text, w / 2.0, 140.0, 28.0, color);
         };
@@ -427,13 +453,15 @@ impl Game {
         let wobble = (t * 1.5).sin() * 0.08;
         let title = "GRAVITY";
         let size = 110.0;
-        let dims = measure_text(title, None, font_size(size), 1.0);
-        draw_text_ex(
-            title,
-            w / 2.0 - dims.width / 2.0,
-            h / 2.0 - 90.0,
-            TextParams { font_size: font_size(size), rotation: wobble, color: WHITE, ..Default::default() },
-        );
+        let dims = measure(title, size);
+        with_font(|font| {
+            draw_text_ex(
+                title,
+                w / 2.0 - dims.width / 2.0,
+                h / 2.0 - 90.0,
+                TextParams { font: Some(font), font_size: font_size(size), rotation: wobble, color: WHITE, ..Default::default() },
+            );
+        });
         let lines = [
             "Go right as far as you can - the obby never ends.",
             "Gravity changes direction when the countdown hits zero.",
@@ -486,7 +514,7 @@ impl Game {
             let mut ly = r.y + 110.0;
             for word in p.description().split(' ') {
                 let candidate = if line.is_empty() { word.to_owned() } else { format!("{line} {word}") };
-                if measure_text(&candidate, None, font_size(20.0), 1.0).width > r.w - 30.0 {
+                if measure(&candidate, 20.0).width > r.w - 30.0 {
                     text_centered(&line, cx, ly, 20.0, WHITE);
                     ly += 24.0;
                     line = word.to_owned();
@@ -525,7 +553,7 @@ impl Game {
         draw_rectangle(bx, by, bw, bh, Color::new(0.12, 0.12, 0.22, 0.95));
         draw_rectangle_lines(bx, by, bw, bh, 3.0, gold);
         // The code so far, centred, with a blinking cursor after it.
-        let width = measure_text(&self.seed_input, None, font_size(56.0), 1.0).width;
+        let width = measure(&self.seed_input, 56.0).width;
         let x = w / 2.0 - width / 2.0;
         draw_label(&self.seed_input, x, by + 65.0, 56.0, WHITE);
         if get_time() % 1.0 < 0.5 {
