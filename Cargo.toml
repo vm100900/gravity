@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-macroquad = "0.4"
+# 0.4.16 plus upstream's "text: avoid spurious font atlas growth" (not on crates.io yet). Without
+# it the glyph atlas can balloon to 16384x16384 — past WebGL's limit, so all text draws as black
+# boxes. Go back to a crates.io version once one includes this commit.
+macroquad = { git = "https://github.com/not-fl3/macroquad", rev = "8d602d3f8ebb8a3a582ee15d92983bbb81ee3ef6" }
 
 # Keep `cargo run` smooth: optimise dependencies (macroquad) even in debug builds.
 [profile.dev.package."*"]
