@@ -1,7 +1,9 @@
 //! Everything that draws the game: the world, the HUD and the menu screens.
 
 use super::*;
+use crate::sketch::*;
 use macroquad::prelude::*;
+use std::f32::consts::PI;
 
 fn draw_arrow(center: Vec2, dir: Dir, size: f32, color: Color) {
     let a = dir.angle();
@@ -66,13 +68,59 @@ fn text_centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_label(text, x - measure(text, size).width / 2.0, y, size, color);
 }
 
+// ---------------------------------------------------------------------------
+// Paper
+// ---------------------------------------------------------------------------
+
+const GRAIN_PX: u16 = 128;
+/// World units covered by one tile of grain.
+const GRAIN_TILE: f32 = 256.0;
+
+thread_local! {
+    /// Faint paper grain, made once and tiled across the world.
+    static GRAIN: Texture2D = make_grain();
+}
+
+fn make_grain() -> Texture2D {
+    let mut img = Image::gen_image_color(GRAIN_PX, GRAIN_PX, Color::new(0.0, 0.0, 0.0, 0.0));
+    let n = u32::from(GRAIN_PX);
+    for y in 0..n {
+        for x in 0..n {
+            let v = jitter(0x6EA1_9A1D, y * n + x);
+            // Mostly a faint tooth, with a few darker specks.
+            let a = if v > 0.97 { 0.09 } else { 0.025 * (v + 1.0) };
+            img.set_pixel(x, y, Color { a, ..INK });
+        }
+    }
+    let tex = Texture2D::from_image(&img);
+    tex.set_filter(FilterMode::Linear);
+    tex
+}
+
+/// Tiles the grain over the part of the world in view. It is fixed to the world, so the paper
+/// scrolls with the level.
+fn draw_paper_grain(left: f32, right: f32) {
+    GRAIN.with(|tex| {
+        let mut x = (left / GRAIN_TILE).floor() * GRAIN_TILE;
+        while x < right {
+            let mut y = (-BOUNDARY / GRAIN_TILE).floor() * GRAIN_TILE;
+            while y < WORLD_HEIGHT + BOUNDARY {
+                let params = DrawTextureParams { dest_size: Some(vec2(GRAIN_TILE, GRAIN_TILE)), ..Default::default() };
+                draw_texture_ex(tex, x, y, WHITE, params);
+                y += GRAIN_TILE;
+            }
+            x += GRAIN_TILE;
+        }
+    });
+}
+
 impl Game {
     // -----------------------------------------------------------------------
     // Drawing
     // -----------------------------------------------------------------------
 
     pub(crate) fn draw(&self) {
-        clear_background(Color::from_rgba(12, 12, 24, 255));
+        clear_background(PAPER);
         self.draw_background();
 
         let view = self.view_size();
@@ -116,29 +164,30 @@ impl Game {
 
     fn draw_background(&self) {
         let (w, h) = (screen_width(), screen_height());
+        // Graphite flecks drift with gravity so you can always feel which way is down.
+        let tail_dir = self.gravity.vec();
         for s in &self.stars {
-            let c = Color::new(0.5, 0.6, 1.0, 0.15 + 0.35 * s.depth);
-            let tail = self.gravity.vec() * 10.0 * s.depth;
             let p = vec2(s.pos.x * w, s.pos.y * h);
-            draw_line(p.x, p.y, p.x - tail.x, p.y - tail.y, 1.5, c);
+            let tail = tail_dir * 6.0 * s.depth;
+            draw_line(p.x, p.y, p.x - tail.x, p.y - tail.y, 1.2, faded(FAINT, 0.35 + 0.4 * s.depth));
         }
     }
 
     fn draw_world(&self) {
         let half_w = self.view_size().x / 2.0 + 100.0;
-        let (left, right) = ((self.cam.x - half_w).max(0.0), self.cam.x + half_w);
+        let (left, right) = ((self.cam.x - half_w).max(-BOUNDARY), self.cam.x + half_w);
 
-        // Interior backdrop and faint grid.
-        draw_rectangle(left, 0.0, right - left, WORLD_HEIGHT, Color::from_rgba(20, 22, 40, 255));
-        let grid = Color::from_rgba(35, 38, 66, 255);
+        draw_paper_grain(left, right);
+
+        // Graph paper is printed, so its lines are straight.
         let mut x = (left / 100.0).floor() * 100.0;
         while x < right {
-            draw_line(x, 0.0, x, WORLD_HEIGHT, 1.0, grid);
+            draw_line(x, 0.0, x, WORLD_HEIGHT, 1.0, FAINT);
             x += 100.0;
         }
-        let mut y = 0.0;
+        let mut y = 100.0;
         while y < WORLD_HEIGHT {
-            draw_line(left, y, right, y, 1.0, grid);
+            draw_line(left, y, right, y, 1.0, FAINT);
             y += 100.0;
         }
 
@@ -146,46 +195,44 @@ impl Game {
         let marker = 50.0 * UNITS_PER_METRE;
         let mut mx = (left / marker).ceil().max(1.0) * marker;
         while mx < right {
-            draw_line(mx, 0.0, mx, WORLD_HEIGHT, 3.0, Color::new(0.5, 0.6, 1.0, 0.25));
-            text_centered(&format!("{:.0} m", mx / UNITS_PER_METRE), mx, WORLD_HEIGHT / 2.0, 40.0, Color::new(0.6, 0.7, 1.0, 0.35));
+            let seed = seed_of(Rect::new(mx, 0.0, 0.0, 0.0));
+            pencil_line(vec2(mx, 0.0), vec2(mx, WORLD_HEIGHT), 2.0, faded(SHADE, 0.7), seed);
+            text_centered(&format!("{:.0} m", mx / UNITS_PER_METRE), mx, WORLD_HEIGHT / 2.0, 40.0, SHADE);
             mx += marker;
         }
         let best = self.best_before_run;
         if best > 0.0 && best > left && best < right {
             let pulse = 0.5 + 0.5 * (get_time() as f32 * 3.0).sin();
-            draw_line(best, 0.0, best, WORLD_HEIGHT, 4.0, Color::new(1.0, 0.85, 0.3, 0.35 + 0.3 * pulse));
-            text_centered("BEST", best, WORLD_HEIGHT / 2.0 - 50.0, 36.0, Color::new(1.0, 0.85, 0.3, 0.8));
+            let mut y = 0.0;
+            while y < WORLD_HEIGHT {
+                let seed = seed_of(Rect::new(best, y, 0.0, 30.0));
+                pencil_line(vec2(best, y), vec2(best, y + 30.0), 2.5, faded(INK, 0.5 + 0.4 * pulse), seed);
+                y += 50.0;
+            }
+            text_centered("BEST", best, WORLD_HEIGHT / 2.0 - 50.0, 36.0, INK);
         }
 
-        // Start marker.
-        draw_label("START", 60.0, WORLD_HEIGHT - 70.0, 30.0, Color::new(1.0, 1.0, 1.0, 0.25));
+        draw_label("START", 60.0, WORLD_HEIGHT - 70.0, 30.0, SHADE);
 
+        self.draw_boundaries(left, right);
         for s in &self.world.solids_between(left, right) {
             let r = s.rect;
-            let (fill, edge) = match s.kind {
-                Kind::Boundary => (Color::from_rgba(50, 52, 78, 255), Color::from_rgba(90, 94, 140, 255)),
-                Kind::Bump => (Color::from_rgba(200, 120, 50, 255), Color::from_rgba(255, 180, 90, 255)),
-                Kind::Platform if r.w > r.h => (Color::from_rgba(40, 150, 170, 255), Color::from_rgba(120, 230, 240, 255)),
-                Kind::Platform => (Color::from_rgba(140, 70, 180, 255), Color::from_rgba(210, 150, 255, 255)),
-                Kind::Web => continue,
-            };
-            draw_rectangle(r.x, r.y, r.w, r.h, fill);
-            if s.kind == Kind::Boundary {
-                // Only outline the inner face, so neighbouring chunks join seamlessly.
-                if r.y >= WORLD_HEIGHT {
-                    draw_line(r.x, r.y, r.x + r.w, r.y, 3.0, edge);
-                } else if r.w > r.h {
-                    draw_line(r.x, r.y + r.h, r.x + r.w, r.y + r.h, 3.0, edge);
-                } else {
-                    draw_line(r.x + r.w, r.y, r.x + r.w, r.y + r.h, 3.0, edge);
+            match s.kind {
+                // Floor, ceiling and start wall are drawn as continuous bands; webs below.
+                Kind::Boundary | Kind::Web => {}
+                Kind::Bump => {
+                    cross_hatch_rect(r, 5.0, 1.2, GRAPHITE, seed_of(r));
+                    pencil_rect(r, 2.2, INK, seed_of(r));
                 }
-            } else {
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 3.0, edge);
+                Kind::Platform => {
+                    hatch_rect(r, 9.0, PI / 4.0, 1.2, SHADE, seed_of(r));
+                    pencil_rect(r, 2.2, INK, seed_of(r));
+                }
             }
         }
 
         for d in &self.dust {
-            draw_circle(d.pos.x, d.pos.y, 3.0 * d.life * 2.0, Color::new(0.8, 0.8, 0.9, d.life * 1.6));
+            draw_circle(d.pos.x, d.pos.y, 1.5 + 2.0 * d.life, faded(SHADE, (d.life * 1.6).min(1.0)));
         }
 
         let t = get_time() as f32;
@@ -193,9 +240,15 @@ impl Game {
             for c in self.world.chunks[i].coins.iter().filter(|c| !c.taken) {
                 // Spinning coin: squash its width over time.
                 let spin = (t * 3.0 + c.home.x * 0.01).cos().abs().max(0.15);
-                draw_circle(c.pos.x, c.pos.y, COIN_RADIUS * 1.6, Color::new(1.0, 0.8, 0.2, 0.12));
-                draw_ellipse(c.pos.x, c.pos.y, COIN_RADIUS * spin, COIN_RADIUS, 0.0, Color::new(1.0, 0.78, 0.15, 1.0));
-                draw_ellipse(c.pos.x, c.pos.y, COIN_RADIUS * spin * 0.6, COIN_RADIUS * 0.6, 0.0, Color::new(1.0, 0.93, 0.5, 1.0));
+                let seed = seed_of(Rect::new(c.home.x, c.home.y, 0.0, 0.0));
+                let rx = COIN_RADIUS * spin;
+                draw_ellipse(c.pos.x, c.pos.y, rx, COIN_RADIUS, 0.0, PAPER);
+                pencil_ellipse(c.pos, rx, COIN_RADIUS, 2.0, INK, seed);
+                pencil_ellipse(c.pos, rx * 0.55, COIN_RADIUS * 0.55, 1.2, GRAPHITE, seed ^ 1);
+                // Two little shine ticks.
+                let s = c.pos + vec2(COIN_RADIUS + 2.0, -COIN_RADIUS - 2.0);
+                draw_line(s.x, s.y, s.x + 4.0, s.y - 4.0, 1.2, GRAPHITE);
+                draw_line(s.x + 2.0, s.y + 4.0, s.x + 6.5, s.y + 2.0, 1.2, GRAPHITE);
             }
         }
 
@@ -209,16 +262,39 @@ impl Game {
         }
 
         for pp in &self.popups {
-            let mut c = pp.color;
-            c.a = pp.life.min(1.0);
-            text_centered(&pp.text, pp.pos.x, pp.pos.y, 36.0, c);
+            let c = faded(INK, pp.life.min(1.0));
+            if pp.big {
+                // Pressed hard: drawn twice, a pixel apart.
+                text_centered(&pp.text, pp.pos.x, pp.pos.y, 56.0, c);
+                text_centered(&pp.text, pp.pos.x + 1.0, pp.pos.y, 56.0, c);
+            } else {
+                text_centered(&pp.text, pp.pos.x, pp.pos.y, 36.0, c);
+            }
+        }
+    }
+
+    /// Floor, ceiling and the wall behind the start: dense cross-hatching with a firm inner edge.
+    /// The hatching is one band across the view (not per chunk), so it has no seams.
+    fn draw_boundaries(&self, left: f32, right: f32) {
+        let band = |r: Rect, seed: u64| cross_hatch_rect(r, 7.0, 1.3, GRAPHITE, seed);
+        band(Rect::new(left, WORLD_HEIGHT, right - left, BOUNDARY), 0xF100);
+        band(Rect::new(left, -BOUNDARY, right - left, BOUNDARY), 0xCE11);
+        if left < 0.0 {
+            band(Rect::new(-BOUNDARY, -BOUNDARY, BOUNDARY, WORLD_HEIGHT + 2.0 * BOUNDARY), 0x3A11);
+            pencil_line(vec2(0.0, 0.0), vec2(0.0, WORLD_HEIGHT), 2.6, INK, 0x3A12);
+        }
+        // Inner faces: one pencil line per chunk, so the lines never move.
+        for i in self.world.chunk_range(left, right) {
+            let x0 = i as f32 * CHUNK_W;
+            pencil_line(vec2(x0, WORLD_HEIGHT), vec2(x0 + CHUNK_W, WORLD_HEIGHT), 2.6, INK, 0xF1_0000 + i as u64);
+            pencil_line(vec2(x0, 0.0), vec2(x0 + CHUNK_W, 0.0), 2.6, INK, 0xCE_0000 + i as u64);
         }
     }
 
     fn draw_web(&self, r: &Rect, life: f32) {
         let a = life.min(1.0);
-        let color = Color::new(0.92, 0.92, 1.0, 0.85 * a);
-        let faint = Color::new(0.92, 0.92, 1.0, 0.45 * a);
+        let strand = faded(GRAPHITE, 0.85 * a);
+        let thread = faded(SHADE, 0.7 * a);
         let horizontal = r.w > r.h;
         // Anchor strands run along the web's length, sagging lines connect them.
         let (len, start, dir, across) = if horizontal {
@@ -227,25 +303,26 @@ impl Game {
             (r.h, vec2(r.x + r.w / 2.0, r.y), vec2(0.0, 1.0), vec2(1.0, 0.0))
         };
         let end = start + dir * len;
-        draw_line(start.x, start.y, end.x, end.y, 2.0, color);
+        draw_line(start.x, start.y, end.x, end.y, 2.0, strand);
         let center = start + dir * len / 2.0;
         let n = 8;
         for i in 0..=n {
             let p = start + dir * len * i as f32 / n as f32;
             let off = across * (if i % 2 == 0 { -1.0 } else { 1.0 }) * r.w.min(r.h) * 1.2;
-            draw_line(center.x, center.y, p.x + off.x, p.y + off.y, 1.2, faint);
+            draw_line(center.x, center.y, p.x + off.x, p.y + off.y, 1.2, thread);
             if i < n {
                 let q = start + dir * len * (i + 1) as f32 / n as f32;
-                draw_line(p.x + off.x, p.y + off.y, q.x - off.x, q.y - off.y, 1.2, faint);
+                draw_line(p.x + off.x, p.y + off.y, q.x - off.x, q.y - off.y, 1.2, thread);
             }
         }
         // Little spider hanging at the middle.
-        draw_circle(center.x, center.y, 5.0, Color::new(0.1, 0.1, 0.12, a));
+        let ink = faded(INK, a);
+        draw_circle(center.x, center.y, 5.0, ink);
         for k in 0..4 {
             let ang = k as f32 * 0.5 - 0.75;
             for side in [-1.0f32, 1.0] {
                 let leg = rotate(vec2(side * 9.0, 0.0), ang * side);
-                draw_line(center.x, center.y, center.x + leg.x, center.y + leg.y, 1.2, Color::new(0.1, 0.1, 0.12, a));
+                draw_line(center.x, center.y, center.x + leg.x, center.y + leg.y, 1.2, ink);
             }
         }
     }
@@ -255,28 +332,31 @@ impl Game {
         let a = m.alpha.clamp(0.0, 1.0);
         let r = MONSTER_RADIUS;
         let c = m.pos + vec2(0.0, (t * 3.0).sin() * 4.0);
-        let body = Color::new(0.35, 0.1, 0.45, 0.9 * a);
-        let glow = Color::new(0.8, 0.2, 1.0, 0.18 * a);
+        let seed = u64::from(m.phase.to_bits());
+        let body = faded(GRAPHITE, 0.9 * a);
 
-        draw_circle(c.x, c.y, r * 1.6, glow);
-        draw_circle(c.x, c.y, r, body);
-        draw_rectangle(c.x - r, c.y, r * 2.0, r * 0.8, body);
-        // Wavy ghost skirt.
+        // A scribbled ghost: round top, square middle, wavy skirt...
+        scribble_circle(c, r, 2.5, 1.6, body, seed);
+        scribble_rect(Rect::new(c.x - r, c.y, r * 2.0, r * 0.8), 2.5, 1.6, body, seed ^ 1);
         for i in 0..4 {
             let x = c.x - r + i as f32 * r * 0.5;
             let dip = r * (1.1 + 0.25 * (t * 8.0 + i as f32).sin());
             draw_triangle(vec2(x, c.y + r * 0.8), vec2(x + r * 0.5, c.y + r * 0.8), vec2(x + r * 0.25, c.y + dip), body);
         }
-        // Angry red eyes that track you.
+        // ...outlined in ink: the top half of the circle and both sides.
+        let ink = faded(INK, a);
+        pencil_arc(c, r, PI, 2.0 * PI, 2.0, ink, seed ^ 2);
+        pencil_line(vec2(c.x - r, c.y), vec2(c.x - r, c.y + r * 0.8), 2.0, ink, seed ^ 3);
+        pencil_line(vec2(c.x + r, c.y), vec2(c.x + r, c.y + r * 0.8), 2.0, ink, seed ^ 4);
+        // Paper-white eyes that track you, under angry brows.
         let look = (self.player.pos - c).normalize_or_zero() * 3.0;
-        let eye = Color::new(1.0, 0.15, 0.2, a);
-        for side in [-1.0, 1.0] {
+        for side in [-1.0f32, 1.0] {
             let e = c + vec2(side * r * 0.38, -r * 0.15);
-            draw_circle(e.x, e.y, 5.0, Color::new(1.0, 0.9, 0.9, a));
-            draw_circle(e.x + look.x, e.y + look.y, 3.0, eye);
-            draw_line(e.x - side * 7.0, e.y - 10.0, e.x + side * 5.0, e.y - 6.0, 2.5, eye);
+            draw_circle(e.x, e.y, 5.5, faded(PAPER, a));
+            draw_circle(e.x + look.x, e.y + look.y, 2.6, ink);
+            draw_line(e.x - side * 7.0, e.y - 10.0, e.x + side * 5.0, e.y - 6.0, 2.5, ink);
         }
-        text_centered("AFK", c.x, c.y + r * 0.75, 16.0, Color::new(1.0, 0.8, 1.0, 0.8 * a));
+        text_centered("AFK", c.x, c.y + r * 0.75, 16.0, faded(PAPER, 0.9 * a));
     }
 
     fn draw_stickman(&self) {
@@ -287,18 +367,13 @@ impl Game {
         // Somersault forward during a double jump.
         let spin = (1.0 - p.flip_spin / DOUBLE_JUMP_SPIN_TIME) * std::f32::consts::TAU;
         let a = p.draw_angle + if p.flip_spin > 0.0 { spin * p.facing } else { 0.0 };
-        let to_world = |v: Vec2| p.pos + rotate(vec2(v.x * p.facing, v.y), a);
-        let hurt = p.hurt_flash;
-        let low_hp = p.health < 30.0 && (get_time() * 8.0).sin() > 0.0;
-        let color = if hurt > 0.0 || low_hp {
-            Color::new(1.0, 1.0 - 0.7 * hurt.max(0.5), 1.0 - 0.7 * hurt.max(0.5), 1.0)
-        } else {
-            WHITE
-        };
-        let line = |a: Vec2, b: Vec2| {
-            let (a, b) = (to_world(a), to_world(b));
-            draw_line(a.x, a.y, b.x, b.y, 3.5, color);
-        };
+        // Hurt or low on health: the whole figure shakes (its strokes keep their shape).
+        let t = get_time() as f32;
+        let shake_amount = 3.0 * p.hurt_flash + if p.health < 30.0 { 1.2 } else { 0.0 };
+        let pos = p.pos + vec2((t * 47.0).sin(), (t * 39.0).cos()) * shake_amount;
+        let to_world = |v: Vec2| pos + rotate(vec2(v.x * p.facing, v.y), a);
+        let width = 3.2 + 1.5 * p.hurt_flash;
+        let line = |from: Vec2, to: Vec2, k: u64| pencil_line(to_world(from), to_world(to), width, INK, 0x5717_C4A9 + k);
 
         let moving = p.grounded && p.vel.length() > 30.0;
         let swing = if moving { p.walk_phase.sin() } else { 0.0 };
@@ -309,28 +384,28 @@ impl Game {
 
         // Legs
         if p.grounded {
-            line(hip, vec2(6.0 + swing * 8.0, 24.0));
-            line(hip, vec2(-6.0 - swing * 8.0, 24.0));
+            line(hip, vec2(6.0 + swing * 8.0, 24.0), 1);
+            line(hip, vec2(-6.0 - swing * 8.0, 24.0), 2);
         } else {
-            line(hip, vec2(6.0, 21.0));
-            line(hip, vec2(-5.0, 18.0));
+            line(hip, vec2(6.0, 21.0), 1);
+            line(hip, vec2(-5.0, 18.0), 2);
         }
         // Body
-        line(neck, hip);
+        line(neck, hip, 3);
         // Arms
         if p.grounded {
-            line(shoulder, vec2(-7.0 - swing * 7.0, 9.0));
-            line(shoulder, vec2(7.0 + swing * 7.0, 9.0));
+            line(shoulder, vec2(-7.0 - swing * 7.0, 9.0), 4);
+            line(shoulder, vec2(7.0 + swing * 7.0, 9.0), 5);
         } else {
-            line(shoulder, vec2(-11.0, -14.0));
-            line(shoulder, vec2(11.0, -14.0));
+            line(shoulder, vec2(-11.0, -14.0), 4);
+            line(shoulder, vec2(11.0, -14.0), 5);
         }
         // Head
         let h = to_world(head);
-        draw_circle(h.x, h.y, 8.0, Color::from_rgba(20, 22, 40, 255));
-        draw_circle_lines(h.x, h.y, 8.0, 3.0, color);
+        draw_circle(h.x, h.y, 8.0, PAPER);
+        pencil_circle(h, 8.0, 2.6, INK, 0x4EAD);
         let eye = to_world(vec2(3.5, -16.0));
-        draw_circle(eye.x, eye.y, 1.6, color);
+        draw_circle(eye.x, eye.y, 1.6, INK);
     }
 
     fn draw_hud(&self) {

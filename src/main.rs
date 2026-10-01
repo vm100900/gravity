@@ -533,7 +533,8 @@ struct Popup {
     pos: Vec2,
     text: String,
     life: f32,
-    color: Color,
+    /// Damage numbers: drawn larger, pressed hard.
+    big: bool,
 }
 
 struct Dust {
@@ -735,7 +736,7 @@ impl Game {
             pos: center - g * 60.0,
             text: "SPIDER WEB!".to_owned(),
             life: 1.2,
-            color: PowerUp::Spider.color(),
+            big: false,
         });
     }
 
@@ -760,7 +761,7 @@ impl Game {
                         pos: c.pos,
                         text: "+1".to_owned(),
                         life: 0.6,
-                        color: Color::new(1.0, 0.85, 0.2, 1.0),
+                        big: false,
                     });
                 }
             }
@@ -932,7 +933,7 @@ impl Game {
                 pos: self.player.pos - vec2(0.0, 60.0),
                 text: "+50 (cheat)".to_owned(),
                 life: 1.0,
-                color: Color::new(1.0, 0.85, 0.2, 1.0),
+                big: false,
             });
         }
         match self.state {
@@ -989,7 +990,7 @@ impl Game {
             pos: p.pos - g * 40.0,
             text: format!("-{}", damage.ceil() as i32),
             life: 1.0,
-            color: Color::new(1.0, 0.3, 0.3, 1.0),
+            big: true,
         });
         if p.health <= 0.0 {
             p.health = 0.0;
