@@ -40,7 +40,7 @@ Make Gravity look hand drawn: graphite pencil on white paper, sketchy lines, han
   figure shakes while `hurt_flash > 0`. Low health (< 30): a constant small shake replaces the
   red flicker. (Only the figure's position shakes, as a damage signal; its pencil strokes keep
   their shape, so this doesn't contradict "still lines".)
-- **AFK monsters:** ghost silhouette filled with dense `GRAPHITE` cross-hatching and an `INK`
+- **AFK monsters:** ghost silhouette shaded with a dense `GRAPHITE` scribble and an `INK`
   outline; `PAPER` eyes with `INK` pupils that track you and angry brows; handwritten "AFK".
 - **Popups:** handwritten; damage numbers bigger and doubled 1 px apart so they look pressed hard.
 - **Dust:** small `SHADE` pencil specks.
@@ -103,6 +103,7 @@ beyond what the new font's metrics require.
 - The new font's glyph texture stays at or below 4096 × 4096 at 1× and 2× pixel density.
 - Screenshots of the web build (headless Chromium) at 1× and 2×: title, gameplay including an
   urgent countdown, shop, death screen and seed box — reviewed and tuned, a few shown to the user.
-- Desktop and web builds succeed; the `GRAVITY_SHOT` screenshot hook still works.
+- Desktop and web builds succeed; the `GRAVITY_SHOT` screenshot hook still compiles (running it
+  opens a game window, so that is left to the user).
 - A rough frame-time check in the headless browser (software rendering) as a performance sanity
   check.
