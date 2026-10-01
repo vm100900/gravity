@@ -1,5 +1,7 @@
 //! GRAVITY — a procedurally generated stickman obby where gravity keeps changing direction.
 
+mod seed;
+
 use macroquad::prelude::*;
 
 // ---------------------------------------------------------------------------
