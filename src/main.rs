@@ -592,6 +592,8 @@ enum State {
     Shop,
     Playing,
     Dead,
+    /// Typing a seed code.
+    EnterSeed,
 }
 
 struct Game {
@@ -634,6 +636,9 @@ struct Game {
     /// Where to go back to when leaving the shop.
     shop_return: State,
     shop_message: (String, f32),
+    /// What has been typed in the seed box, and where Esc goes back to.
+    seed_input: String,
+    seed_return: State,
 }
 
 /// Mixed into the world seed for the gravity-flip sequence, so it doesn't mirror world generation.
@@ -681,6 +686,8 @@ impl Game {
             spider_cooldown: 0.0,
             shop_return: State::Title,
             shop_message: (String::new(), 0.0),
+            seed_input: String::new(),
+            seed_return: State::Title,
         };
         g.restart_run();
         g
@@ -877,6 +884,33 @@ impl Game {
         }
     }
 
+    fn open_seed_entry(&mut self, from: State) {
+        self.seed_return = from;
+        self.seed_input.clear();
+        self.state = State::EnterSeed;
+    }
+
+    fn update_seed_entry(&mut self) {
+        while let Some(c) = get_char_pressed() {
+            self.seed_input = seed::normalize(&format!("{}{c}", self.seed_input));
+        }
+        if is_key_pressed(KeyCode::Backspace) {
+            self.seed_input.pop();
+        }
+        if is_key_pressed(KeyCode::Escape) {
+            self.state = if self.seed_return == State::Dead { State::Dead } else { State::Title };
+        } else if is_key_pressed(KeyCode::Enter) {
+            let code = if self.seed_input.is_empty() {
+                seed::random_code(self.rng.next_u64())
+            } else {
+                self.seed_input.clone()
+            };
+            self.world = World::new(code);
+            self.state = State::Playing;
+            self.restart_run();
+        }
+    }
+
     fn new_world(&mut self) {
         self.world = World::new(seed::random_code(self.rng.next_u64()));
         self.restart_run();
@@ -920,8 +954,13 @@ impl Game {
 
     fn update(&mut self, dt: f32) {
         self.update_effects(dt);
+        // macroquad keeps every typed character until it is read: outside the seed box, throw
+        // them away so they don't pile up or spill into the box when it opens (the S included).
+        if self.state != State::EnterSeed {
+            while get_char_pressed().is_some() {}
+        }
         // Debug-build cheat for testing the shop: C gives 50 coins.
-        if cfg!(debug_assertions) && is_key_pressed(KeyCode::C) {
+        if cfg!(debug_assertions) && self.state != State::EnterSeed && is_key_pressed(KeyCode::C) {
             self.coins += 50;
             self.shop_message = ("Cheat: +50 coins".to_owned(), 2.0);
             self.popups.push(Popup {
@@ -935,15 +974,20 @@ impl Game {
             State::Title => {
                 if is_key_pressed(KeyCode::B) {
                     self.open_shop(State::Title);
+                } else if is_key_pressed(KeyCode::S) {
+                    self.open_seed_entry(State::Title);
                 } else if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) || is_mouse_button_pressed(MouseButton::Left) {
                     self.state = State::Playing;
                     self.restart_run();
                 }
             }
             State::Shop => self.update_shop(),
+            State::EnterSeed => self.update_seed_entry(),
             State::Dead => {
                 if is_key_pressed(KeyCode::B) {
                     self.open_shop(State::Dead);
+                } else if is_key_pressed(KeyCode::S) {
+                    self.open_seed_entry(State::Dead);
                 } else if is_key_pressed(KeyCode::R) || is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
                     self.state = State::Playing;
                     self.restart_run();
@@ -1257,15 +1301,18 @@ impl Game {
         match self.state {
             State::Title => self.draw_title(),
             State::Shop => self.draw_shop(),
+            State::EnterSeed => self.draw_seed_entry(),
             State::Dead => self.draw_overlay(
                 "YOU DIED",
                 Color::new(1.0, 0.25, 0.3, 1.0),
                 &[
                     self.death_cause,
                     &format!("You made it {:.0} m   (best {:.0} m)", self.distance(), self.best / UNITS_PER_METRE),
+                    &format!("World {} - give this seed to a friend to race the same world", self.world.code),
                     "",
                     "R / Space - try this world again",
                     "N - brand new world",
+                    "S - type a seed",
                     &format!("B - power-up shop   (+{} coins this run, {} total)", self.coins_this_run, self.coins),
                     &if self.used_up.is_empty() {
                         String::new()
@@ -1516,19 +1563,16 @@ impl Game {
         draw_rectangle(20.0, 38.0, 220.0 * hp, 20.0, hp_color);
         draw_rectangle_lines(20.0, 38.0, 220.0, 20.0, 2.0, WHITE);
 
-        // Distance.
-        draw_rectangle(sw - 230.0, 8.0, 222.0, 80.0, Color::new(0.0, 0.0, 0.0, 0.45));
-        draw_label(&format!("{:.0} m", self.distance()), sw - 220.0, 38.0, 36.0, WHITE);
-        draw_label(&format!("BEST {:.0} m", self.best / UNITS_PER_METRE), sw - 220.0, 62.0, 22.0, Color::new(1.0, 0.85, 0.3, 1.0));
-        draw_label(
-            &format!("world {:x}  deaths {}", self.world.seed & 0xFFFF, self.deaths),
-            sw - 220.0,
-            80.0,
-            16.0,
-            GRAY,
-        );
+        // Distance, and the world's seed code (the box widens for long codes).
+        let world_line = format!("world {}  deaths {}", self.world.code, self.deaths);
+        let box_w = (measure_text(&world_line, None, font_size(16.0), 1.0).width + 20.0).max(222.0);
+        let x = sw - box_w - 8.0;
+        draw_rectangle(x, 8.0, box_w, 80.0, Color::new(0.0, 0.0, 0.0, 0.45));
+        draw_label(&format!("{:.0} m", self.distance()), x + 10.0, 38.0, 36.0, WHITE);
+        draw_label(&format!("BEST {:.0} m", self.best / UNITS_PER_METRE), x + 10.0, 62.0, 22.0, Color::new(1.0, 0.85, 0.3, 1.0));
+        draw_label(&world_line, x + 10.0, 80.0, 16.0, LIGHTGRAY);
 
-        if matches!(self.state, State::Title | State::Shop) {
+        if matches!(self.state, State::Title | State::Shop | State::EnterSeed) {
             return;
         }
 
@@ -1632,12 +1676,12 @@ impl Game {
             "Go right as far as you can - the obby never ends.",
             "Gravity changes direction when the countdown hits zero.",
             "Land too hard and you take fall damage - lose it all and you die.",
-            "Don't go AFK for 30 seconds... the AFK monsters are watching.",
+            &format!("Don't go AFK for {:.0} seconds... the AFK monsters are watching.", AFK_TIME),
             "Grab coins and spend them on power-ups like SPIDER - each lasts one round.",
             "",
             "Move: A/D (or W/S when gravity is sideways)    Jump: Space (again in mid-air to double jump)",
             "",
-            "",
+            "S - type a seed to play the same world as a friend",
             &format!("Press SPACE or click to start      B - shop ({} coins)", self.coins),
         ];
         for (i, l) in lines.iter().enumerate() {
@@ -1707,6 +1751,32 @@ impl Game {
         if cfg!(debug_assertions) {
             text_centered("debug build: press C for +50 coins", w / 2.0, h / 2.0 + 245.0, 20.0, Color::new(1.0, 0.85, 0.3, 0.6));
         }
+    }
+
+    fn draw_seed_entry(&self) {
+        let (w, h) = (screen_width(), screen_height());
+        let gold = Color::new(1.0, 0.85, 0.3, 1.0);
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.02, 0.08, 0.92));
+        text_centered("ENTER A SEED", w / 2.0, h / 2.0 - 120.0, 64.0, WHITE);
+        let (bw, bh) = (560.0, 90.0);
+        let (bx, by) = (w / 2.0 - bw / 2.0, h / 2.0 - 75.0);
+        draw_rectangle(bx, by, bw, bh, Color::new(0.12, 0.12, 0.22, 0.95));
+        draw_rectangle_lines(bx, by, bw, bh, 3.0, gold);
+        // The code so far, centred, with a blinking cursor after it.
+        let width = measure_text(&self.seed_input, None, font_size(56.0), 1.0).width;
+        let x = w / 2.0 - width / 2.0;
+        draw_label(&self.seed_input, x, by + 65.0, 56.0, WHITE);
+        if get_time() % 1.0 < 0.5 {
+            draw_label("_", x + width + 4.0, by + 65.0, 56.0, gold);
+        }
+        text_centered(
+            &format!("Letters and numbers, up to {}. Leave it blank for a random world.", seed::MAX_LEN),
+            w / 2.0,
+            by + bh + 45.0,
+            24.0,
+            WHITE,
+        );
+        text_centered("Enter - play    Backspace - delete    Esc - back", w / 2.0, by + bh + 80.0, 22.0, GRAY);
     }
 
     fn draw_overlay(&self, title: &str, color: Color, lines: &[&str]) {
