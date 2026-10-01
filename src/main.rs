@@ -281,11 +281,14 @@ struct Chunk {
 struct World {
     chunks: Vec<Chunk>,
     seed: u64,
+    /// The shareable code this world is built from (see `seed.rs`).
+    code: String,
 }
 
 impl World {
-    fn new(seed: u64) -> World {
-        let mut w = World { chunks: Vec::new(), seed };
+    /// The world for a normalized seed code.
+    fn new(code: String) -> World {
+        let mut w = World { chunks: Vec::new(), seed: seed::world_seed(&code), code };
         w.ensure_generated(0.0);
         w
     }
@@ -600,6 +603,9 @@ struct Game {
     flip_timer: f32,
     flip_flash: f32,
     rng: Rng,
+    /// Gravity flip directions: restarted from the world seed every run, so a seed always
+    /// flips the same way, for you and for your friend.
+    flip_rng: Rng,
     cam: Vec2,
     shake: f32,
     popups: Vec<Popup>,
@@ -630,6 +636,9 @@ struct Game {
     shop_message: (String, f32),
 }
 
+/// Mixed into the world seed for the gravity-flip sequence, so it doesn't mirror world generation.
+const FLIP_SALT: u64 = 0xF11F_5EED_D1B5_4A33;
+
 fn spawn_point() -> Vec2 {
     vec2(120.0, WORLD_HEIGHT - HALF_TALL)
 }
@@ -637,7 +646,7 @@ fn spawn_point() -> Vec2 {
 impl Game {
     fn new(seed: u64) -> Game {
         let mut rng = Rng::new(seed ^ 0x9E37_79B9_7F4A_7C15);
-        let world = World::new(rng.next_u64());
+        let world = World::new(seed::random_code(rng.next_u64()));
         let stars = (0..90)
             .map(|_| Star { pos: vec2(rng.f(), rng.f()), depth: rng.range(0.2, 1.0) })
             .collect();
@@ -650,6 +659,7 @@ impl Game {
             flip_flash: 0.0,
             world,
             rng,
+            flip_rng: Rng::new(1),
             cam: spawn_point(),
             shake: 0.0,
             popups: Vec::new(),
@@ -678,7 +688,7 @@ impl Game {
 
     fn pick_next(&mut self) -> Dir {
         let options: Vec<Dir> = Dir::ALL.iter().copied().filter(|d| *d != self.gravity).collect();
-        options[(self.rng.next_u64() % options.len() as u64) as usize]
+        options[(self.flip_rng.next_u64() % options.len() as u64) as usize]
     }
 
     fn nearby_solids(&self) -> Vec<Solid> {
@@ -829,6 +839,7 @@ impl Game {
     }
 
     fn restart_run(&mut self) {
+        self.flip_rng = Rng::new(self.world.seed ^ FLIP_SALT);
         self.player = Player::new(spawn_point());
         self.gravity = Dir::Down;
         let solids = self.nearby_solids();
@@ -867,7 +878,7 @@ impl Game {
     }
 
     fn new_world(&mut self) {
-        self.world = World::new(self.rng.next_u64());
+        self.world = World::new(seed::random_code(self.rng.next_u64()));
         self.restart_run();
     }
 
@@ -1754,5 +1765,63 @@ async fn main() {
         }
         let _ = frame;
         next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every solid and coin position in the first few chunks of the world for `code`.
+    fn layout(code: &str) -> (Vec<Rect>, Vec<Vec2>) {
+        let mut world = World::new(code.to_owned());
+        world.ensure_generated(3.0 * CHUNK_W);
+        let solids = world.chunks.iter().flat_map(|c| c.solids.iter().map(|s| s.rect)).collect();
+        let coins = world.chunks.iter().flat_map(|c| c.coins.iter().map(|c| c.home)).collect();
+        (solids, coins)
+    }
+
+    /// The first `n` gravity directions of a fresh run in the world for `code`.
+    fn flips(game: &mut Game, code: &str, n: usize) -> Vec<Dir> {
+        game.world = World::new(code.to_owned());
+        game.restart_run();
+        let mut seen = vec![game.next_gravity];
+        for _ in 1..n {
+            game.flip();
+            seen.push(game.next_gravity);
+        }
+        seen
+    }
+
+    #[test]
+    fn same_code_builds_the_same_world() {
+        assert_eq!(layout("BANANA"), layout("BANANA"));
+    }
+
+    #[test]
+    fn different_codes_build_different_worlds() {
+        assert_ne!(layout("BANANA").0, layout("K7Q2X").0);
+    }
+
+    #[test]
+    fn same_code_flips_gravity_the_same_way() {
+        // Two games with different internal seeds stand in for two friends' computers.
+        let first = flips(&mut Game::new(1), "BANANA", 12);
+        assert_eq!(first, flips(&mut Game::new(987_654_321), "BANANA", 12));
+    }
+
+    #[test]
+    fn retrying_replays_the_same_flips() {
+        let mut game = Game::new(5);
+        let first = flips(&mut game, "BANANA", 12);
+        game.flip();
+        game.flip();
+        game.restart_run(); // what R does
+        let mut again = vec![game.next_gravity];
+        for _ in 1..12 {
+            game.flip();
+            again.push(game.next_gravity);
+        }
+        assert_eq!(first, again);
     }
 }
