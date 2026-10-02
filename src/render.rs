@@ -5,16 +5,6 @@ use crate::sketch::*;
 use macroquad::prelude::*;
 use std::f32::consts::PI;
 
-fn draw_arrow(center: Vec2, dir: Dir, size: f32, color: Color) {
-    let a = dir.angle();
-    let p = |x: f32, y: f32| center + rotate(vec2(x, y) * size, a);
-    // Shaft
-    draw_triangle(p(-0.18, -0.5), p(0.18, -0.5), p(0.18, 0.1), color);
-    draw_triangle(p(-0.18, -0.5), p(0.18, 0.1), p(-0.18, 0.1), color);
-    // Head
-    draw_triangle(p(-0.45, 0.05), p(0.45, 0.05), p(0.0, 0.55), color);
-}
-
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
@@ -112,6 +102,12 @@ fn draw_paper_grain(left: f32, right: f32) {
             x += GRAIN_TILE;
         }
     });
+}
+
+/// A sheet of paper with a sketched outline, for HUD boxes and menu cards.
+fn paper_card(r: Rect, seed: u64) {
+    draw_rectangle(r.x, r.y, r.w, r.h, faded(PAPER, 0.92));
+    pencil_rect(r, 2.0, INK, seed);
 }
 
 impl Game {
@@ -409,59 +405,52 @@ impl Game {
     }
 
     fn draw_hud(&self) {
-        let (sw, _sh) = (screen_width(), screen_height());
+        let (sw, sh) = (screen_width(), screen_height());
         let t = get_time() as f32;
 
-        // Health bar.
-        let hp = self.player.health / MAX_HEALTH;
-        draw_label("HEALTH", 20.0, 30.0, 24.0, WHITE);
-        draw_rectangle(20.0, 38.0, 220.0, 20.0, Color::from_rgba(40, 40, 60, 255));
-        let hp_color = if hp > 0.5 {
-            Color::new(0.3, 0.9, 0.4, 1.0)
-        } else if hp > 0.25 {
-            Color::new(1.0, 0.8, 0.2, 1.0)
-        } else {
-            Color::new(1.0, 0.25, 0.25, 1.0)
-        };
-        draw_rectangle(20.0, 38.0, 220.0 * hp, 20.0, hp_color);
-        draw_rectangle_lines(20.0, 38.0, 220.0, 20.0, 2.0, WHITE);
+        // Health: a pencil box hatched up to the current health.
+        let hp = (self.player.health / MAX_HEALTH).clamp(0.0, 1.0);
+        draw_label("HEALTH", 20.0, 30.0, 24.0, INK);
+        let bar = Rect::new(20.0, 38.0, 220.0, 20.0);
+        draw_rectangle(bar.x, bar.y, bar.w, bar.h, PAPER);
+        if hp > 0.0 {
+            cross_hatch_rect(Rect::new(bar.x, bar.y, bar.w * hp, bar.h), 4.0, 1.3, INK, 0x4EA1);
+        }
+        pencil_rect(bar, 2.0, INK, 0x4EA2);
 
-        // Distance, and the world's seed code (the box widens for long codes).
+        // Distance, and the world's seed code (the card widens for long codes).
         let world_line = format!("world {}  deaths {}", self.world.code, self.deaths);
         let box_w = (measure(&world_line, 16.0).width + 20.0).max(222.0);
-        let x = sw - box_w - 8.0;
-        draw_rectangle(x, 8.0, box_w, 80.0, Color::new(0.0, 0.0, 0.0, 0.45));
-        draw_label(&format!("{:.0} m", self.distance()), x + 10.0, 38.0, 36.0, WHITE);
-        draw_label(&format!("BEST {:.0} m", self.best / UNITS_PER_METRE), x + 10.0, 62.0, 22.0, Color::new(1.0, 0.85, 0.3, 1.0));
-        draw_label(&world_line, x + 10.0, 80.0, 16.0, LIGHTGRAY);
+        let card = Rect::new(sw - box_w - 8.0, 8.0, box_w, 80.0);
+        paper_card(card, 0xD157);
+        draw_label(&format!("{:.0} m", self.distance()), card.x + 10.0, 38.0, 36.0, INK);
+        draw_label(&format!("BEST {:.0} m", self.best / UNITS_PER_METRE), card.x + 10.0, 62.0, 22.0, GRAPHITE);
+        draw_label(&world_line, card.x + 10.0, 80.0, 16.0, GRAPHITE);
 
         if matches!(self.state, State::Title | State::Shop | State::EnterSeed) {
             return;
         }
 
-        // Flip countdown.
+        // Flip countdown. Under 3 seconds the number and arrow shake.
         let cx = sw / 2.0;
         let urgent = self.flip_timer < 3.0;
-        let blink = urgent && (t * 8.0).sin() > 0.0;
-        let color = if urgent {
-            if blink { Color::new(1.0, 0.3, 0.3, 1.0) } else { Color::new(1.0, 0.7, 0.3, 1.0) }
-        } else {
-            WHITE
-        };
-        draw_rectangle(cx - 150.0, 8.0, 300.0, 92.0, Color::new(0.0, 0.0, 0.0, 0.45));
-        text_centered("NEXT FLIP IN", cx, 30.0, 22.0, Color::new(1.0, 1.0, 1.0, 0.7));
-        text_centered(&format!("{:.1}", self.flip_timer.max(0.0)), cx - 30.0, 80.0, 60.0, color);
-        draw_arrow(vec2(cx + 70.0, 62.0), self.next_gravity, 44.0, color);
-        text_centered(self.next_gravity.name(), cx + 70.0, 96.0, 16.0, color);
+        let jolt = if urgent { vec2((t * 41.0).sin(), (t * 37.0).cos()) * 2.0 } else { Vec2::ZERO };
+        paper_card(Rect::new(cx - 150.0, 8.0, 300.0, 92.0), 0xF11B);
+        text_centered("NEXT FLIP IN", cx, 30.0, 22.0, GRAPHITE);
+        text_centered(&format!("{:.1}", self.flip_timer.max(0.0)), cx - 30.0 + jolt.x, 80.0 + jolt.y, 60.0, INK);
+        pencil_arrow(vec2(cx + 70.0, 58.0) + jolt, self.next_gravity.vec(), 40.0, 3.0, INK, 0xA770);
+        text_centered(self.next_gravity.name(), cx + 70.0, 96.0, 16.0, INK);
 
-        // Current gravity indicator.
-        draw_label("GRAVITY", 20.0, 90.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
-        draw_arrow(vec2(120.0, 84.0), self.gravity, 30.0, WHITE);
+        // Current gravity.
+        draw_label("GRAVITY", 20.0, 90.0, 20.0, GRAPHITE);
+        pencil_arrow(vec2(120.0, 84.0), self.gravity.vec(), 28.0, 2.6, INK, 0x96A7);
 
         // Coins and active power-ups.
-        draw_circle(32.0, 128.0, 11.0, Color::new(1.0, 0.78, 0.15, 1.0));
-        draw_circle(32.0, 128.0, 6.0, Color::new(1.0, 0.93, 0.5, 1.0));
-        draw_label(&format!("{}", self.coins), 52.0, 136.0, 28.0, Color::new(1.0, 0.85, 0.3, 1.0));
+        let coin = vec2(32.0, 128.0);
+        draw_circle(coin.x, coin.y, 11.0, PAPER);
+        pencil_circle(coin, 11.0, 2.0, INK, 0xC014);
+        pencil_circle(coin, 6.0, 1.2, GRAPHITE, 0xC015);
+        draw_label(&format!("{}", self.coins), 52.0, 136.0, 28.0, INK);
         let mut y = 168.0;
         for p in &self.owned {
             let label = if *p == PowerUp::Spider && self.spider_cooldown > 0.0 {
@@ -469,47 +458,45 @@ impl Game {
             } else {
                 p.name().to_owned()
             };
-            draw_label(&label, 20.0, y, 20.0, p.color());
+            draw_label(&label, 20.0, y, 20.0, INK);
             y += 22.0;
         }
 
-        // Screen-edge warning glow toward where gravity is about to point.
+        // Hatching builds up on the screen edge gravity is about to point at.
         if urgent {
-            let a = 0.15 + 0.25 * (0.5 + 0.5 * (t * 10.0).sin()) * (1.0 - self.flip_timer / 3.0 + 0.3);
-            let c = Color::new(1.0, 0.3, 0.2, a);
-            let (w, h) = (screen_width(), screen_height());
-            let th = 30.0;
-            match self.next_gravity {
-                Dir::Down => draw_rectangle(0.0, h - th, w, th, c),
-                Dir::Up => draw_rectangle(0.0, 0.0, w, th, c),
-                Dir::Left => draw_rectangle(0.0, 0.0, th, h, c),
-                Dir::Right => draw_rectangle(w - th, 0.0, th, h, c),
-            }
+            let strength = 0.5 + 0.5 * (0.5 + 0.5 * (t * 10.0).sin()) * (1.0 - self.flip_timer / 3.0 + 0.3);
+            let th = 40.0;
+            let edge = match self.next_gravity {
+                Dir::Down => Rect::new(0.0, sh - th, sw, th),
+                Dir::Up => Rect::new(0.0, 0.0, sw, th),
+                Dir::Left => Rect::new(0.0, 0.0, th, sh),
+                Dir::Right => Rect::new(sw - th, 0.0, th, sh),
+            };
+            cross_hatch_rect(edge, 5.0, 1.8, faded(GRAPHITE, strength.min(1.0)), 0xED6E);
         }
 
         let afk_in = AFK_TIME - self.idle;
-        let w = screen_width();
         let afk_banner = |text: &str, color: Color| {
-            let dims = measure(text, 28.0);
-            draw_rectangle(w / 2.0 - dims.width / 2.0 - 16.0, 110.0, dims.width + 32.0, 42.0, Color::new(0.1, 0.0, 0.15, 0.75));
-            text_centered(text, w / 2.0, 140.0, 28.0, color);
+            let width = measure(text, 28.0).width;
+            paper_card(Rect::new(sw / 2.0 - width / 2.0 - 16.0, 110.0, width + 32.0, 42.0), 0xAF0B);
+            text_centered(text, sw / 2.0, 140.0, 28.0, color);
         };
         if afk_in <= 0.0 {
             let pulse = 0.6 + 0.4 * (t * 6.0).sin();
-            afk_banner("AFK MONSTERS!  Press anything to scare them off!", Color::new(0.95, 0.5, 1.0, pulse));
+            afk_banner("AFK MONSTERS!  Press anything to scare them off!", faded(INK, pulse));
         } else if afk_in <= AFK_WARNING {
-            afk_banner(&format!("Are you there? AFK monsters in {:.0}...", afk_in.ceil()), Color::new(0.9, 0.7, 1.0, 1.0));
+            afk_banner(&format!("Are you there? AFK monsters in {:.0}...", afk_in.ceil()), INK);
         }
 
+        // A gravity flip smudges the page (a white flash wouldn't show on paper).
         if self.flip_flash > 0.0 {
-            let (w, h) = (screen_width(), screen_height());
-            draw_rectangle(0.0, 0.0, w, h, Color::new(1.0, 1.0, 1.0, 0.25 * self.flip_flash));
+            draw_rectangle(0.0, 0.0, sw, sh, faded(SHADE, 0.3 * self.flip_flash));
             text_centered(
                 &format!("GRAVITY: {}", self.gravity.name()),
-                w / 2.0,
-                h / 2.0 - 120.0,
+                sw / 2.0,
+                sh / 2.0 - 120.0,
                 56.0,
-                Color::new(1.0, 1.0, 1.0, self.flip_flash),
+                faded(INK, self.flip_flash),
             );
         }
 
@@ -518,7 +505,10 @@ impl Game {
         } else {
             "W/S or Up/Down: move   Space: jump / double jump   R: restart"
         };
-        text_centered(hint, sw / 2.0, screen_height() - 16.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.5));
+        // On its own scrap of paper, so it stays readable over the floor's hatching.
+        let hint_w = measure(hint, 20.0).width;
+        paper_card(Rect::new(sw / 2.0 - hint_w / 2.0 - 12.0, sh - 36.0, hint_w + 24.0, 28.0), 0x41E7);
+        text_centered(hint, sw / 2.0, sh - 16.0, 20.0, GRAPHITE);
     }
 
     fn draw_title(&self) {
