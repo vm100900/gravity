@@ -5,6 +5,7 @@
 
 use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A grey: the look is strictly black and white, so red = green = blue.
 pub const fn grey(v: f32) -> Color {
@@ -25,6 +26,38 @@ pub const FAINT: Color = grey(0.84);
 /// `color` with its opacity scaled by `a`.
 pub fn faded(color: Color, a: f32) -> Color {
     Color { a: color.a * a, ..color }
+}
+
+// ---------------------------------------------------------------------------
+// Line boil: strokes redraw a little, like a hand-drawn cartoon
+// ---------------------------------------------------------------------------
+
+/// How many times a second the strokes are redrawn.
+const BOIL_FPS: f64 = 8.0;
+/// How many different drawings the boil cycles through.
+const BOIL_DRAWINGS: u64 = 3;
+
+/// Which drawing of the boil loop is showing.
+static BOIL: AtomicU64 = AtomicU64::new(0);
+
+/// Which drawing of the boil loop to show at `time` (seconds).
+pub fn boil_drawing(time: f64) -> u64 {
+    (time * BOIL_FPS) as u64 % BOIL_DRAWINGS
+}
+
+/// `seed` as it is in boil drawing `drawing`; drawing 0 leaves it unchanged.
+pub fn boil_seed(seed: u64, drawing: u64) -> u64 {
+    seed ^ drawing.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
+/// Picks the boil drawing for everything drawn from now on (once per frame).
+pub fn set_boil(drawing: u64) {
+    BOIL.store(drawing, Ordering::Relaxed);
+}
+
+/// `seed`, redrawn for the current boil drawing.
+fn boiled(seed: u64) -> u64 {
+    boil_seed(seed, BOIL.load(Ordering::Relaxed))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +193,7 @@ fn polyline(points: &[Vec2], width: f32, color: Color) {
 
 /// A sketchy pencil line: a firm stroke plus a lighter second pass that doesn't quite match.
 pub fn pencil_line(a: Vec2, b: Vec2, width: f32, color: Color, seed: u64) {
+    let seed = boiled(seed);
     polyline(&stroke_points(a, b, seed), width, faded(color, 0.9));
     polyline(&stroke_points(a, b, seed ^ 0x5EC0_4D5A), width * 0.6, faded(color, 0.5));
 }
@@ -175,6 +209,7 @@ pub fn pencil_rect(r: Rect, width: f32, color: Color, seed: u64) {
 /// Hatching inside `r`. Each line is pulled in from the edges by a varying amount and drawn a
 /// little lighter or darker, so it looks done by hand.
 pub fn hatch_rect(r: Rect, spacing: f32, angle: f32, width: f32, color: Color, seed: u64) {
+    let seed = boiled(seed);
     for (id, a, b) in hatch_lines(r, spacing, angle) {
         let k = (id as u32).wrapping_mul(3);
         let len = (b - a).length();
@@ -193,6 +228,7 @@ pub fn cross_hatch_rect(r: Rect, spacing: f32, width: f32, color: Color, seed: u
 
 /// A hand-drawn ellipse: a wobbly loop that runs a little past where it started.
 pub fn pencil_ellipse(c: Vec2, rx: f32, ry: f32, width: f32, color: Color, seed: u64) {
+    let seed = boiled(seed);
     let start = PI * jitter(seed, 9999);
     polyline(&arc_points(c, rx, ry, start, start + TAU * 1.08, seed), width, color);
 }
@@ -202,7 +238,7 @@ pub fn pencil_circle(c: Vec2, radius: f32, width: f32, color: Color, seed: u64) 
 }
 
 pub fn pencil_arc(c: Vec2, radius: f32, from: f32, to: f32, width: f32, color: Color, seed: u64) {
-    polyline(&arc_points(c, radius, radius, from, to, seed), width, color);
+    polyline(&arc_points(c, radius, radius, from, to, boiled(seed)), width, color);
 }
 
 /// A hand-drawn arrow pointing along `dir` (a unit vector), centred on `c`.
@@ -216,11 +252,11 @@ pub fn pencil_arrow(c: Vec2, dir: Vec2, size: f32, width: f32, color: Color, see
 }
 
 pub fn scribble_rect(r: Rect, step: f32, width: f32, color: Color, seed: u64) {
-    polyline(&scribble_rect_points(r, step, seed), width, color);
+    polyline(&scribble_rect_points(r, step, boiled(seed)), width, color);
 }
 
 pub fn scribble_circle(c: Vec2, radius: f32, step: f32, width: f32, color: Color, seed: u64) {
-    polyline(&scribble_circle_points(c, radius, step, seed), width, color);
+    polyline(&scribble_circle_points(c, radius, step, boiled(seed)), width, color);
 }
 
 // ---------------------------------------------------------------------------
@@ -378,5 +414,30 @@ mod tests {
         for p in scribble_circle_points(Vec2::ZERO, 22.0, 2.5, 3) {
             assert!(p.length() <= 22.0 + 1e-3, "{p}");
         }
+    }
+
+    #[test]
+    fn boil_cycles_through_three_drawings_eight_times_a_second() {
+        let drawings: Vec<u64> = [0.0, 0.13, 0.26, 0.38, 0.51].iter().map(|t| boil_drawing(*t)).collect();
+        assert_eq!(drawings, vec![0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn boil_seed_keeps_drawing_zero_and_changes_the_others() {
+        let s = 0xABCD;
+        assert_eq!(boil_seed(s, 0), s);
+        assert_ne!(boil_seed(s, 1), s);
+        assert_ne!(boil_seed(s, 2), s);
+        assert_ne!(boil_seed(s, 1), boil_seed(s, 2));
+        assert_eq!(boil_seed(s, 1), boil_seed(s, 1));
+    }
+
+    #[test]
+    fn a_stroke_redraws_differently_in_each_drawing() {
+        let (a, b) = (vec2(0.0, 0.0), vec2(200.0, 0.0));
+        let drawn: Vec<Vec<Vec2>> = (0..3).map(|d| stroke_points(a, b, boil_seed(7, d))).collect();
+        assert_ne!(drawn[0], drawn[1]);
+        assert_ne!(drawn[1], drawn[2]);
+        assert_ne!(drawn[0], drawn[2]);
     }
 }

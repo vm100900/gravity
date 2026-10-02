@@ -116,6 +116,7 @@ impl Game {
     // -----------------------------------------------------------------------
 
     pub(crate) fn draw(&self) {
+        set_boil(boil_drawing(get_time()));
         clear_background(PAPER);
         self.draw_background();
 
