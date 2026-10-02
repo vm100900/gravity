@@ -331,8 +331,8 @@ impl Game {
         let body = faded(GRAPHITE, 0.9 * a);
 
         // A scribbled ghost: round top, square middle, wavy skirt...
-        scribble_circle(c, r, 2.5, 1.6, body, seed);
-        scribble_rect(Rect::new(c.x - r, c.y, r * 2.0, r * 0.8), 2.5, 1.6, body, seed ^ 1);
+        scribble_circle(c, r, 1.6, 1.8, body, seed);
+        scribble_rect(Rect::new(c.x - r, c.y, r * 2.0, r * 0.8), 1.6, 1.8, body, seed ^ 1);
         for i in 0..4 {
             let x = c.x - r + i as f32 * r * 0.5;
             let dip = r * (1.1 + 0.25 * (t * 8.0 + i as f32).sin());
