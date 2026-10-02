@@ -100,14 +100,6 @@ impl PowerUp {
             PowerUp::ToughBones => 25,
         }
     }
-
-    fn color(self) -> Color {
-        match self {
-            PowerUp::Spider => Color::new(0.85, 0.85, 0.95, 1.0),
-            PowerUp::Magnet => Color::new(1.0, 0.35, 0.35, 1.0),
-            PowerUp::ToughBones => Color::new(1.0, 0.95, 0.75, 1.0),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

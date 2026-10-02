@@ -136,7 +136,6 @@ impl Game {
             State::EnterSeed => self.draw_seed_entry(),
             State::Dead => self.draw_overlay(
                 "YOU DIED",
-                Color::new(1.0, 0.25, 0.3, 1.0),
                 &[
                     self.death_cause,
                     &format!("You made it {:.0} m   (best {:.0} m)", self.distance(), self.best / UNITS_PER_METRE),
@@ -511,9 +510,16 @@ impl Game {
         text_centered(hint, sw / 2.0, sh - 16.0, 20.0, GRAPHITE);
     }
 
+    /// Washes the world out so a menu can sit on top of it.
+    fn wash(&self) {
+        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), faded(PAPER, 0.85));
+    }
+
     fn draw_title(&self) {
         let (w, h) = (screen_width(), screen_height());
-        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.05, 0.75));
+        self.wash();
+        let card_w = (w - 40.0).min(1000.0);
+        paper_card(Rect::new(w / 2.0 - card_w / 2.0, h / 2.0 - 190.0, card_w, 470.0), 0x7171);
         let t = get_time() as f32;
         let wobble = (t * 1.5).sin() * 0.08;
         let title = "GRAVITY";
@@ -524,7 +530,7 @@ impl Game {
                 title,
                 w / 2.0 - dims.width / 2.0,
                 h / 2.0 - 90.0,
-                TextParams { font: Some(font), font_size: font_size(size), rotation: wobble, color: WHITE, ..Default::default() },
+                TextParams { font: Some(font), font_size: font_size(size), rotation: wobble, color: INK, ..Default::default() },
             );
         });
         let lines = [
@@ -540,106 +546,115 @@ impl Game {
             &format!("Press SPACE or click to start      B - shop ({} coins)", self.coins),
         ];
         for (i, l) in lines.iter().enumerate() {
-            let c = if i == lines.len() - 1 { Color::new(1.0, 0.9, 0.4, 0.6 + 0.4 * (t * 4.0).sin().abs()) } else { WHITE };
+            let c = if i == lines.len() - 1 { faded(INK, 0.6 + 0.4 * (t * 4.0).sin().abs()) } else { GRAPHITE };
             text_centered(l, w / 2.0, h / 2.0 - 30.0 + i as f32 * 30.0, 26.0, c);
         }
     }
 
     fn draw_shop(&self) {
         let (w, h) = (screen_width(), screen_height());
-        draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.02, 0.08, 0.92));
-        text_centered("POWER-UP SHOP", w / 2.0, h / 2.0 - 190.0, 64.0, WHITE);
+        self.wash();
+        text_centered("POWER-UP SHOP", w / 2.0, h / 2.0 - 190.0, 64.0, INK);
         text_centered(
             &format!("Coins: {}      (power-ups last one round)", self.coins),
             w / 2.0,
             h / 2.0 - 150.0,
             28.0,
-            Color::new(1.0, 0.85, 0.3, 1.0),
+            GRAPHITE,
         );
 
         let mouse: Vec2 = mouse_position().into();
         for (i, (p, r)) in Self::shop_cards().iter().enumerate() {
             let owned = self.has(*p);
             let affordable = self.coins >= p.cost();
-            let hover = r.contains(mouse);
-            let bg = if owned {
-                Color::new(0.1, 0.3, 0.15, 0.9)
-            } else if hover {
-                Color::new(0.2, 0.2, 0.35, 0.95)
-            } else {
-                Color::new(0.12, 0.12, 0.22, 0.9)
-            };
-            draw_rectangle(r.x, r.y, r.w, r.h, bg);
-            draw_rectangle_lines(r.x, r.y, r.w, r.h, 3.0, p.color());
+            let seed = 0x5409 + i as u64;
+            paper_card(*r, seed);
+            if owned {
+                hatch_rect(*r, 12.0, PI / 4.0, 1.0, faded(SHADE, 0.5), seed);
+            }
+            if r.contains(mouse) {
+                // Hovered: a second, looser outline.
+                pencil_rect(Rect::new(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0), 1.6, GRAPHITE, seed ^ 0xF0);
+            }
             let cx = r.x + r.w / 2.0;
-            text_centered(&format!("[{}]", i + 1), cx, r.y + 30.0, 22.0, GRAY);
-            text_centered(p.name(), cx, r.y + 70.0, 34.0, p.color());
+            draw_label(&format!("[{}]", i + 1), r.x + 12.0, r.y + 28.0, 22.0, SHADE);
+            let icon = vec2(cx, r.y + 50.0);
+            match p {
+                PowerUp::Spider => doodle_spider(icon, 30.0, INK, seed),
+                PowerUp::Magnet => doodle_magnet(icon, 30.0, INK, seed),
+                PowerUp::ToughBones => doodle_bone(icon, 30.0, INK, seed),
+            }
+            text_centered(p.name(), cx, r.y + 104.0, 34.0, INK);
             // Word-wrap the description.
             let mut line = String::new();
-            let mut ly = r.y + 110.0;
+            let mut ly = r.y + 134.0;
             for word in p.description().split(' ') {
                 let candidate = if line.is_empty() { word.to_owned() } else { format!("{line} {word}") };
                 if measure(&candidate, 20.0).width > r.w - 30.0 {
-                    text_centered(&line, cx, ly, 20.0, WHITE);
+                    text_centered(&line, cx, ly, 20.0, GRAPHITE);
                     ly += 24.0;
                     line = word.to_owned();
                 } else {
                     line = candidate;
                 }
             }
-            text_centered(&line, cx, ly, 20.0, WHITE);
+            text_centered(&line, cx, ly, 20.0, GRAPHITE);
             let (label, color) = if owned {
-                ("READY FOR NEXT ROUND".to_owned(), Color::new(0.4, 1.0, 0.5, 1.0))
+                ("READY FOR NEXT ROUND".to_owned(), INK)
             } else if affordable {
-                (format!("BUY - {} coins", p.cost()), Color::new(1.0, 0.85, 0.3, 1.0))
+                (format!("BUY - {} coins", p.cost()), INK)
             } else {
-                (format!("{} coins", p.cost()), Color::new(0.6, 0.6, 0.6, 1.0))
+                (format!("{} coins", p.cost()), SHADE)
             };
             text_centered(&label, cx, r.y + r.h - 25.0, 26.0, color);
         }
 
         let (msg, time) = &self.shop_message;
         if *time > 0.0 {
-            text_centered(msg, w / 2.0, h / 2.0 + 175.0, 28.0, Color::new(1.0, 1.0, 1.0, time.min(1.0)));
+            text_centered(msg, w / 2.0, h / 2.0 + 175.0, 28.0, faded(INK, time.min(1.0)));
         }
-        text_centered("1/2/3 or click to buy    Esc/B/Space - back", w / 2.0, h / 2.0 + 215.0, 22.0, GRAY);
+        text_centered("1/2/3 or click to buy    Esc/B/Space - back", w / 2.0, h / 2.0 + 215.0, 22.0, SHADE);
         if cfg!(debug_assertions) {
-            text_centered("debug build: press C for +50 coins", w / 2.0, h / 2.0 + 245.0, 20.0, Color::new(1.0, 0.85, 0.3, 0.6));
+            text_centered("debug build: press C for +50 coins", w / 2.0, h / 2.0 + 245.0, 20.0, SHADE);
         }
     }
 
     fn draw_seed_entry(&self) {
         let (w, h) = (screen_width(), screen_height());
-        let gold = Color::new(1.0, 0.85, 0.3, 1.0);
-        draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.02, 0.08, 0.92));
-        text_centered("ENTER A SEED", w / 2.0, h / 2.0 - 120.0, 64.0, WHITE);
-        let (bw, bh) = (560.0, 90.0);
-        let (bx, by) = (w / 2.0 - bw / 2.0, h / 2.0 - 75.0);
-        draw_rectangle(bx, by, bw, bh, Color::new(0.12, 0.12, 0.22, 0.95));
-        draw_rectangle_lines(bx, by, bw, bh, 3.0, gold);
-        // The code so far, centred, with a blinking cursor after it.
+        self.wash();
+        text_centered("ENTER A SEED", w / 2.0, h / 2.0 - 120.0, 64.0, INK);
+        let bx = Rect::new(w / 2.0 - 280.0, h / 2.0 - 75.0, 560.0, 90.0);
+        paper_card(bx, 0x5EED);
+        pencil_rect(Rect::new(bx.x - 5.0, bx.y - 5.0, bx.w + 10.0, bx.h + 10.0), 1.4, GRAPHITE, 0x5EEE);
+        // The code so far, centred, with a blinking pencil cursor after it.
         let width = measure(&self.seed_input, 56.0).width;
         let x = w / 2.0 - width / 2.0;
-        draw_label(&self.seed_input, x, by + 65.0, 56.0, WHITE);
+        draw_label(&self.seed_input, x, bx.y + 65.0, 56.0, INK);
         if get_time() % 1.0 < 0.5 {
-            draw_label("_", x + width + 4.0, by + 65.0, 56.0, gold);
+            pencil_line(vec2(x + width + 8.0, bx.y + 70.0), vec2(x + width + 34.0, bx.y + 70.0), 3.0, INK, 0xC0A5);
         }
         text_centered(
             &format!("Letters and numbers, up to {}. Leave it blank for a random world.", seed::MAX_LEN),
             w / 2.0,
-            by + bh + 45.0,
+            bx.y + bx.h + 45.0,
             24.0,
-            WHITE,
+            INK,
         );
-        text_centered("Enter - play    Backspace - delete    Esc - back", w / 2.0, by + bh + 80.0, 22.0, GRAY);
+        text_centered("Enter - play    Backspace - delete    Esc - back", w / 2.0, bx.y + bx.h + 80.0, 22.0, SHADE);
     }
 
-    fn draw_overlay(&self, title: &str, color: Color, lines: &[&str]) {
+    fn draw_overlay(&self, title: &str, lines: &[&str]) {
         let (w, h) = (screen_width(), screen_height());
-        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.6));
-        text_centered(title, w / 2.0, h / 2.0 - 40.0, 80.0, color);
+        self.wash();
+        let card_w = (w - 40.0).min(900.0);
+        paper_card(Rect::new(w / 2.0 - card_w / 2.0, h / 2.0 - 120.0, card_w, 150.0 + lines.len() as f32 * 30.0), 0xDEAD);
+        text_centered(title, w / 2.0, h / 2.0 - 40.0, 80.0, INK);
+        // A scribbled underline.
+        let tw = measure(title, 80.0).width;
+        pencil_line(vec2(w / 2.0 - tw / 2.0, h / 2.0 - 22.0), vec2(w / 2.0 + tw / 2.0, h / 2.0 - 26.0), 3.0, INK, 0x0D1E);
+        pencil_line(vec2(w / 2.0 - tw / 2.0 + 10.0, h / 2.0 - 16.0), vec2(w / 2.0 + tw / 2.0 - 6.0, h / 2.0 - 18.0), 2.0, GRAPHITE, 0x0D1F);
         for (i, l) in lines.iter().enumerate() {
-            text_centered(l, w / 2.0, h / 2.0 + 10.0 + i as f32 * 30.0, 28.0, WHITE);
+            text_centered(l, w / 2.0, h / 2.0 + 10.0 + i as f32 * 30.0, 28.0, INK);
         }
     }
 }
