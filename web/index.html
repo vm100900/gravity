@@ -11,13 +11,23 @@
             height: 100%;
             overflow: hidden;
             position: absolute;
-            background: #0c0c18;
+            background: #f2f2f2;
             z-index: 0;
         }
+        /* The page is strictly black and white: no blue focus ring around the game. */
+        canvas { outline: none; }
     </style>
 </head>
 <body>
     <canvas id="glcanvas" tabindex="1"></canvas>
+    <script>
+        // Draw on an opaque canvas. WebGL's default canvas is see-through, so every translucent
+        // stroke would also let the page behind the game show through.
+        const getContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+            return getContext.call(this, type, Object.assign({}, attributes, { alpha: false }));
+        };
+    </script>
     <script src="mq_js_bundle.js"></script>
     <script>load("gravity.wasm");</script>
 </body>
